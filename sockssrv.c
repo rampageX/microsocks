@@ -357,7 +357,7 @@ static void collect(sblist *threads) {
 
 static int usage(void) {
 	dprintf(2,
-		"MicroSocks SOCKS5 Server\n"
+		"MicroSocks SOCKS5 Server Poll() version\n"
 		"------------------------\n"
 		"usage: microsocks -1 -i listenip -p port -u user -P password -b bindaddr\n"
 		"all arguments are optional.\n"
