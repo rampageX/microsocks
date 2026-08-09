@@ -506,8 +506,12 @@ int main(int argc, char** argv) {
 			a = &attr;
 			pthread_attr_setstacksize(a, THREAD_STACK_SIZE);
 		}
-		if(pthread_create(&curr->pt, a, clientthread, curr) != 0)
+		if(pthread_create(&curr->pt, a, clientthread, curr) != 0) {
+			sblist_delete(threads, sblist_getsize(threads)-1);
+			close(curr->client.fd);
+			free(curr);
 			dolog("pthread_create failed. OOM?\n");
+		}
 		if(a) pthread_attr_destroy(&attr);
 	}
 }
