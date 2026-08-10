@@ -511,6 +511,7 @@ int main(int argc, char** argv) {
 			close(curr->client.fd);
 			free(curr);
 			dolog("pthread_create failed. OOM?\n");
+			usleep(FAILURE_TIMEOUT);
 		}
 		if(a) pthread_attr_destroy(&attr);
 	}
