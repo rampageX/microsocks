@@ -64,7 +64,7 @@
 #define THREAD_STACK_SIZE 32*1024
 #endif
 
-static int quiet;
+static int quiet, timeout;
 static const char* auth_user;
 static const char* auth_pass;
 static sblist* auth_ips;
@@ -273,10 +273,7 @@ static void copyloop(int fd1, int fd2) {
 	};
 
 	while(1) {
-		/* inactive connections are reaped after 15 min to free resources.
-		   usually programs send keep-alive packets so this should only happen
-		   when a connection is really unused. */
-		switch(poll(fds, 2, 60*15*1000)) {
+		switch(poll(fds, 2, timeout ? timeout*1000 : -1)) {
 			case 0:
 				return;
 			case -1:
@@ -386,21 +383,23 @@ static int usage(void) {
 	dprintf(2,
 		"MicroSocks SOCKS5 Server\n"
 		"------------------------\n"
-		"usage: microsocks -1 -q -i listenip -p port -u user -P pass -b bindaddr -w ips\n"
+		"usage: microsocks -1 -q -t timeout -i listenip -p port -u user -P pass -b bindaddr -w ips\n"
 		"all arguments are optional.\n"
 		"by default listenip is 0.0.0.0 and port 1080.\n\n"
-		"option -q disables logging.\n"
-		"option -b specifies which ip outgoing connections are bound to\n"
-		"option -w allows to specify a comma-separated whitelist of ip addresses,\n"
-		" that may use the proxy without user/pass authentication.\n"
-		" e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1\n"
-		" to allow access ONLY to those ips, choose an impossible to guess user/pw combo.\n"
-		"option -1 activates auth_once mode: once a specific ip address\n"
-		" authed successfully with user/pass, it is added to a whitelist\n"
-		" and may use the proxy without auth.\n"
-		" this is handy for programs like firefox that don't support\n"
-		" user/pass auth. for it to work you'd basically make one connection\n"
-		" with another program that supports it, and then you can use firefox too.\n"
+		"-q disables logging.\n"
+		"-b specifies which ip outgoing connections are bound to\n"
+		"-t timeout is specified in seconds, default 0.\n"
+		"   if timeout is set to 0, block until the OS signals activity.\n"
+		"-w allows to specify a comma-separated whitelist of ip addresses,\n"
+		"   that may use the proxy without user/pass authentication.\n"
+		"   e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1\n"
+		"   to allow access ONLY to those ips, choose impossible to guess user/pw combo.\n"
+		"-1 activates auth_once mode: once a specific ip address\n"
+		"   authed successfully with user/pass, it is added to a whitelist\n"
+		"   and may use the proxy without auth.\n"
+		"   this is handy for programs like firefox that don't support\n"
+		"   user/pass auth. for it to work you'd basically make one connection\n"
+		"   with another program that supports it, and then you can use firefox too.\n"
 	);
 	return 1;
 }
@@ -416,7 +415,7 @@ int main(int argc, char** argv) {
 	const char *listenip = "0.0.0.0";
 	char *p, *q;
 	unsigned port = 1080;
-	while((ch = getopt(argc, argv, ":1qb:i:p:u:P:w:")) != -1) {
+	while((ch = getopt(argc, argv, ":1qb:t:i:p:u:P:w:")) != -1) {
 		switch(ch) {
 			case 'w': /* fall-through */
 			case '1':
@@ -438,6 +437,9 @@ int main(int argc, char** argv) {
 				break;
 			case 'q':
 				quiet = 1;
+				break;
+			case 't':
+				timeout = atoi(optarg);
 				break;
 			case 'b':
 				resolve_sa(optarg, 0, &bind_addr);

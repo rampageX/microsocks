@@ -41,23 +41,28 @@ libc is not even 50 KB. that's easily usable even on the cheapest routers.
 command line options
 --------------------
 
-    microsocks -1 -q -i listenip -p port -u user -P passw -b bindaddr -w wl
+    microsocks -1 -q -t timeout -i listenip -p port -u user -P passw -b bindaddr -w wl
 
+```
 all arguments are optional.
 by default listenip is 0.0.0.0 and port 1080.
 
-- option -q disables logging.
-- option -b specifies which ip outgoing connections are bound to
-- option -w allows to specify a comma-separated whitelist of ip addresses,
-that may use the proxy without user/pass authentication.
-e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1
-to allow access ONLY to those ips, choose an impossible to guess user/pw combo.
-- option -1 activates auth_once mode: once a specific ip address
-authed successfully with user/pass, it is added to a whitelist
-and may use the proxy without auth.
-this is handy for programs like firefox that don't support
-user/pass auth. for it to work you'd basically make one connection
-with another program that supports it, and then you can use firefox too.
+-q disables logging.
+-b specifies which ip outgoing connections are bound to
+-t timeout is specified in seconds, default 0.
+   if timeout is set to 0, block until the OS signals activity.
+-w allows to specify a comma-separated whitelist of ip addresses,
+   that may use the proxy without user/pass authentication.
+   e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1
+   to allow access ONLY to those ips, choose impossible to guess user/pw combo.
+-1 activates auth_once mode: once a specific ip address
+   authed successfully with user/pass, it is added to a whitelist
+   and may use the proxy without auth.
+   this is handy for programs like firefox that don't support
+   user/pass auth. for it to work you'd basically make one connection
+   with another program that supports it, and then you can use firefox too.
+```
+
 for example, authenticate once using curl:
 
     curl --socks5 user:password@listenip:port anyurl
