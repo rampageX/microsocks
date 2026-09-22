@@ -392,7 +392,7 @@ static int usage(void) {
 		"   if timeout is set to 0, block until the OS signals activity.\n"
 		"-w allows to specify a comma-separated whitelist of ip addresses,\n"
 		"   that may use the proxy without user/pass authentication.\n"
-		"   e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1\n"
+		"   e.g. -w 127.0.0.1,192.168.1.1,::1 or just -w 10.0.0.1\n"
 		"   to allow access ONLY to those ips, choose impossible to guess user/pw combo.\n"
 		"-1 activates auth_once mode: once a specific ip address\n"
 		"   authed successfully with user/pass, it is added to a whitelist\n"

@@ -53,7 +53,7 @@ by default listenip is 0.0.0.0 and port 1080.
    if timeout is set to 0, block until the OS signals activity.
 -w allows to specify a comma-separated whitelist of ip addresses,
    that may use the proxy without user/pass authentication.
-   e.g. -w 127.0.0.1,192.168.1.1.1,::1 or just -w 10.0.0.1
+   e.g. -w 127.0.0.1,192.168.1.1,::1 or just -w 10.0.0.1
    to allow access ONLY to those ips, choose impossible to guess user/pw combo.
 -1 activates auth_once mode: once a specific ip address
    authed successfully with user/pass, it is added to a whitelist
