@@ -38,6 +38,17 @@ like 10 KB static linked when only ipv4 support is enabled.
 still, if optimized for size, *this* program when static linked against musl
 libc is not even 50 KB. that's easily usable even on the cheapest routers.
 
+compilation/installation
+------------------------
+
+    make && sudo make install
+
+if you want to override variables used in the Makefile, such as CC, CFLAGS, LDFLAGS,
+prefix: do so in config.mak:
+
+    printf 'CC=i686-musl-linux-gcc\nprefix=/usr\n' > config.mak
+    make
+
 command line options
 --------------------
 
