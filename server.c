@@ -1,7 +1,6 @@
 #include "server.h"
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 int resolve(const char *host, unsigned short port, struct addrinfo** addr) {
 	struct addrinfo hints = {
@@ -24,7 +23,7 @@ int resolve_sa(const char *host, unsigned short port, union sockaddr_union *res)
 	return 0;
 }
 
-int bindtoip(int fd, union sockaddr_union *bindaddr) {
+int bindtoip(socket_handle fd, union sockaddr_union *bindaddr) {
 	socklen_t sz = SOCKADDR_UNION_LENGTH(bindaddr);
 	if(sz)
 		return bind(fd, (struct sockaddr*) bindaddr, sz);
@@ -33,30 +32,34 @@ int bindtoip(int fd, union sockaddr_union *bindaddr) {
 
 int server_waitclient(struct server *server, struct client* client) {
 	socklen_t clen = sizeof client->addr;
-	return ((client->fd = accept(server->fd, (void*)&client->addr, &clen)) == -1)*-1;
+	return ((client->fd = accept(server->fd, (void*)&client->addr, &clen)) == INVALID_SOCKET)*-1;
 }
 
 int server_setup(struct server *server, const char* listenip, unsigned short port) {
 	struct addrinfo *ainfo = 0;
 	if(resolve(listenip, port, &ainfo)) return -1;
 	struct addrinfo* p;
-	int listenfd = -1;
+	socket_handle listenfd = INVALID_SOCKET;
 	for(p = ainfo; p; p = p->ai_next) {
-		if((listenfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) < 0)
+		if((listenfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == INVALID_SOCKET)
 			continue;
 		int yes = 1;
-		setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+#ifdef _WIN32
+		setsockopt(listenfd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&yes, sizeof yes);
+#else
+		setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+#endif
 		if(bind(listenfd, p->ai_addr, p->ai_addrlen) < 0) {
-			close(listenfd);
-			listenfd = -1;
+			socket_close(listenfd);
+			listenfd = INVALID_SOCKET;
 			continue;
 		}
 		break;
 	}
 	freeaddrinfo(ainfo);
-	if(listenfd < 0) return -2;
+	if(listenfd == INVALID_SOCKET) return -2;
 	if(listen(listenfd, SOMAXCONN) < 0) {
-		close(listenfd);
+		socket_close(listenfd);
 		return -3;
 	}
 	server->fd = listenfd;

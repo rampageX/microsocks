@@ -1,0 +1,98 @@
+name: Static release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches: [master]
+    paths: [release-version]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select release tag
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ $REF_TYPE == tag ]]; then
+            tag=$REF_NAME
+          else
+            tag=$(cat release-version)
+          fi
+          [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Build and verify static binaries
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/microsocks-tools"
+          "$RUNNER_TEMP/microsocks-tools/bin/pip" install ziglang==0.15.2
+          ZIG="$RUNNER_TEMP/microsocks-tools/bin/python-zig" ./release.sh "$TAG"
+      - name: Test Linux ARM targets
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+          mkdir -p "$RUNNER_TEMP/armv7" "$RUNNER_TEMP/aarch64"
+          tar -xf "dist/microsocks-$TAG-linux-armv7-sf.tar.gz" -C "$RUNNER_TEMP/armv7"
+          tar -xf "dist/microsocks-$TAG-linux-aarch64.tar.gz" -C "$RUNNER_TEMP/aarch64"
+          python3 scripts/smoke.py qemu-arm -cpu cortex-a9,vfp=off,neon=off,vfp-d32=off "$RUNNER_TEMP/armv7/microsocks"
+          python3 scripts/smoke.py qemu-aarch64 "$RUNNER_TEMP/aarch64/microsocks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: static-release
+          path: dist/*
+          if-no-files-found: error
+
+  windows-test:
+    needs: build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: static-release
+          path: dist
+      - name: Test Windows x64 executable
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          Expand-Archive "dist/microsocks-${env:TAG}-windows-x64.zip" "$env:RUNNER_TEMP/microsocks"
+          python scripts/smoke.py "$env:RUNNER_TEMP/microsocks/microsocks.exe"
+
+  publish:
+    needs: [build, windows-test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: static-release
+          path: dist
+      - name: Publish verified archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          remote_tag=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$TAG" \
+            --jq ".[] | select(.ref == \"refs/tags/$TAG\") | .ref")
+          if [[ -n $remote_tag ]]; then
+            [[ $(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG" --jq .sha) == "$GITHUB_SHA" ]]
+          fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "MicroSocks $TAG" --generate-notes

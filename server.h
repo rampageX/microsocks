@@ -4,9 +4,24 @@
 #undef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+typedef SOCKET socket_handle;
+#define socket_close closesocket
+#define socket_errno WSAGetLastError()
+#define SOCKET_ERROR_CODE(name) WSA##name
+#else
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <unistd.h>
+typedef int socket_handle;
+#define INVALID_SOCKET (-1)
+#define socket_close close
+#define socket_errno errno
+#define SOCKET_ERROR_CODE(name) name
+#endif
 
 #pragma RcB2 DEP "server.c"
 
@@ -31,16 +46,16 @@ union sockaddr_union {
 
 struct client {
 	union sockaddr_union addr;
-	int fd;
+	socket_handle fd;
 };
 
 struct server {
-	int fd;
+	socket_handle fd;
 };
 
 int resolve(const char *host, unsigned short port, struct addrinfo** addr);
 int resolve_sa(const char *host, unsigned short port, union sockaddr_union *res);
-int bindtoip(int fd, union sockaddr_union *bindaddr);
+int bindtoip(socket_handle fd, union sockaddr_union *bindaddr);
 
 int server_waitclient(struct server *server, struct client* client);
 int server_setup(struct server *server, const char* listenip, unsigned short port);

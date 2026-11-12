@@ -22,18 +22,25 @@
 */
 
 #define _GNU_SOURCE
-#include <unistd.h>
 #define _POSIX_C_SOURCE 200809L
+#include "server.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#ifndef _WIN32
 #include <pthread.h>
 #include <signal.h>
 #include <poll.h>
 #include <arpa/inet.h>
+#else
+#include <windows.h>
+#include <process.h>
+#include <getopt.h>
+#endif
+#include <stdatomic.h>
+#include <inttypes.h>
 #include <errno.h>
 #include <limits.h>
-#include "server.h"
 #include "sblist.h"
 
 /* timeout in microseconds on resource exhaustion to prevent excessive
@@ -68,8 +75,24 @@ static int quiet, timeout;
 static const char* auth_user;
 static const char* auth_pass;
 static sblist* auth_ips;
+#ifdef _WIN32
+static SRWLOCK auth_ips_lock = SRWLOCK_INIT;
+#define auth_read_lock() (AcquireSRWLockShared(&auth_ips_lock), 0)
+#define auth_read_unlock() ReleaseSRWLockShared(&auth_ips_lock)
+#define auth_write_lock() (AcquireSRWLockExclusive(&auth_ips_lock), 0)
+#define auth_write_unlock() ReleaseSRWLockExclusive(&auth_ips_lock)
+#define socket_poll WSAPoll
+#define resource_pause() Sleep((FAILURE_TIMEOUT + 999) / 1000)
+#define dprintf(fd, ...) fprintf(stderr, __VA_ARGS__)
+#else
 static pthread_rwlock_t auth_ips_lock = PTHREAD_RWLOCK_INITIALIZER;
-static const struct server* server;
+#define auth_read_lock() pthread_rwlock_rdlock(&auth_ips_lock)
+#define auth_read_unlock() pthread_rwlock_unlock(&auth_ips_lock)
+#define auth_write_lock() pthread_rwlock_wrlock(&auth_ips_lock)
+#define auth_write_unlock() pthread_rwlock_unlock(&auth_ips_lock)
+#define socket_poll poll
+#define resource_pause() usleep(FAILURE_TIMEOUT)
+#endif
 static union sockaddr_union bind_addr = {.v4.sin_family = AF_UNSPEC};
 
 enum socksstate {
@@ -98,19 +121,21 @@ enum errorcode {
 };
 
 struct thread {
+#ifdef _WIN32
+	HANDLE handle;
+#else
 	pthread_t pt;
+#endif
 	struct client client;
 	enum socksstate state;
-	volatile int  done;
+	atomic_int done;
 };
 
 #ifndef CONFIG_LOG
 #define CONFIG_LOG 1
 #endif
 #if CONFIG_LOG
-/* we log to stderr because it's not using line buffering, i.e. malloc which would need
-   locking when called from different threads. for the same reason we use dprintf,
-   which writes directly to an fd. */
+/* Log to stderr. On POSIX, dprintf writes directly to its file descriptor. */
 #define dolog(...) do { if(!quiet) dprintf(2, __VA_ARGS__); } while(0)
 #else
 static void dolog(const char* fmt, ...) { }
@@ -125,7 +150,7 @@ static struct addrinfo* addr_choose(struct addrinfo* list, union sockaddr_union*
 	return list;
 }
 
-static int connect_socks_target(unsigned char *buf, size_t n, struct client *client) {
+static int connect_socks_target(unsigned char *buf, size_t n, struct client *client, socket_handle *connected) {
 	if(n < 5) return -EC_GENERAL_FAILURE;
 	if(buf[0] != 5) return -EC_GENERAL_FAILURE;
 	if(buf[1] != 1) return -EC_COMMAND_NOT_SUPPORTED; /* we support only CONNECT method */
@@ -161,28 +186,29 @@ static int connect_socks_target(unsigned char *buf, size_t n, struct client *cli
 	/* there's no suitable errorcode in rfc1928 for dns lookup failure */
 	if(resolve(namebuf, port, &remote)) return -EC_GENERAL_FAILURE;
 	struct addrinfo* raddr = addr_choose(remote, &bind_addr);
-	int fd = socket(raddr->ai_family, SOCK_STREAM, 0);
-	if(fd == -1) {
+	socket_handle fd = socket(raddr->ai_family, SOCK_STREAM, 0);
+	int error;
+	if(fd == INVALID_SOCKET) {
 		eval_errno:
-		if(fd != -1) close(fd);
+		error = socket_errno;
+		if(fd != INVALID_SOCKET) socket_close(fd);
 		freeaddrinfo(remote);
-		switch(errno) {
-			case ETIMEDOUT:
+		switch(error) {
+			case SOCKET_ERROR_CODE(ETIMEDOUT):
 				return -EC_TTL_EXPIRED;
-			case EPROTOTYPE:
-			case EPROTONOSUPPORT:
-			case EAFNOSUPPORT:
+			case SOCKET_ERROR_CODE(EPROTOTYPE):
+			case SOCKET_ERROR_CODE(EPROTONOSUPPORT):
+			case SOCKET_ERROR_CODE(EAFNOSUPPORT):
 				return -EC_ADDRESSTYPE_NOT_SUPPORTED;
-			case ECONNREFUSED:
+			case SOCKET_ERROR_CODE(ECONNREFUSED):
 				return -EC_CONN_REFUSED;
-			case ENETDOWN:
-			case ENETUNREACH:
+			case SOCKET_ERROR_CODE(ENETDOWN):
+			case SOCKET_ERROR_CODE(ENETUNREACH):
 				return -EC_NET_UNREACHABLE;
-			case EHOSTUNREACH:
+			case SOCKET_ERROR_CODE(EHOSTUNREACH):
 				return -EC_HOST_UNREACHABLE;
-			case EBADF:
 			default:
-			perror("socket/connect");
+			dolog("socket/connect failed (%d)\n", error);
 			return -EC_GENERAL_FAILURE;
 		}
 	}
@@ -198,9 +224,10 @@ static int connect_socks_target(unsigned char *buf, size_t n, struct client *cli
 		af = SOCKADDR_UNION_AF(&client->addr);
 		void *ipdata = SOCKADDR_UNION_ADDRESS(&client->addr);
 		inet_ntop(af, ipdata, clientname, sizeof clientname);
-		dolog("client[%d] %s: connected to %s:%d\n", client->fd, clientname, namebuf, port);
+		dolog("client[%" PRIuPTR "] %s: connected to %s:%d\n", (uintptr_t)client->fd, clientname, namebuf, port);
 	}
-	return fd;
+	*connected = fd;
+	return EC_SUCCESS;
 }
 
 static int is_authed(union sockaddr_union *client, union sockaddr_union *authedip) {
@@ -237,9 +264,9 @@ static enum authmethod check_auth_method(unsigned char *buf, size_t n, struct cl
 			if(!auth_user) return AM_NO_AUTH;
 			else if(auth_ips) {
 				int authed = 0;
-				if(pthread_rwlock_rdlock(&auth_ips_lock) == 0) {
+				if(auth_read_lock() == 0) {
 					authed = is_in_authed_list(&client->addr);
-					pthread_rwlock_unlock(&auth_ips_lock);
+					auth_read_unlock();
 				}
 				if(authed) return AM_NO_AUTH;
 			}
@@ -252,46 +279,50 @@ static enum authmethod check_auth_method(unsigned char *buf, size_t n, struct cl
 	return AM_INVALID;
 }
 
-static void send_auth_response(int fd, int version, enum authmethod meth) {
+static void send_auth_response(socket_handle fd, int version, enum authmethod meth) {
 	unsigned char buf[2];
 	buf[0] = version;
 	buf[1] = meth;
-	write(fd, buf, 2);
+	send(fd, (const char*)buf, sizeof buf, 0);
 }
 
-static void send_error(int fd, enum errorcode ec) {
+static void send_error(socket_handle fd, enum errorcode ec) {
 	/* position 4 contains ATYP, the address type, which is the same as used in the connect
 	   request. we're lazy and return always IPV4 address type in errors. */
 	char buf[10] = { 5, ec, 0, 1 /*AT_IPV4*/, 0,0,0,0, 0,0 };
-	write(fd, buf, 10);
+	send(fd, buf, sizeof buf, 0);
 }
 
-static void copyloop(int fd1, int fd2) {
+static void copyloop(socket_handle fd1, socket_handle fd2) {
 	struct pollfd fds[2] = {
 		[0] = {.fd = fd1, .events = POLLIN},
 		[1] = {.fd = fd2, .events = POLLIN},
 	};
 
 	while(1) {
-		switch(poll(fds, 2, timeout ? timeout*1000 : -1)) {
+		switch(socket_poll(fds, 2, timeout ? timeout*1000 : -1)) {
 			case 0:
 				return;
 			case -1:
-				if(errno == EINTR || errno == EAGAIN) continue;
-				else perror("poll");
+				if(socket_errno == SOCKET_ERROR_CODE(EINTR)) continue;
+#ifndef _WIN32
+				if(errno == EAGAIN) continue;
+#endif
+				dolog("poll failed (%d)\n", socket_errno);
 				return;
 		}
-		int infd = (fds[0].revents & POLLIN) ? fd1 : fd2;
-		int outfd = infd == fd2 ? fd1 : fd2;
+		if(!((fds[0].revents | fds[1].revents) & POLLIN)) return;
+		socket_handle infd = (fds[0].revents & POLLIN) ? fd1 : fd2;
+		socket_handle outfd = infd == fd2 ? fd1 : fd2;
 		/* since the biggest stack consumer in the entire code is
 		   libc's getaddrinfo(), we can safely use at least half the
 		   available stacksize to improve throughput. */
 		char buf[MIN(16*1024, THREAD_STACK_SIZE/2)];
-		ssize_t sent = 0, n = read(infd, buf, sizeof buf);
+		ssize_t sent = 0, n = recv(infd, buf, sizeof buf, 0);
 		if(n <= 0) return;
 		while(sent < n) {
-			ssize_t m = write(outfd, buf+sent, n-sent);
-			if(m < 0) return;
+			ssize_t m = send(outfd, buf+sent, n-sent, 0);
+			if(m <= 0) return;
 			sent += m;
 		}
 	}
@@ -314,55 +345,60 @@ static enum errorcode check_credentials(unsigned char* buf, size_t n) {
 	return EC_NOT_ALLOWED;
 }
 
-static int handshake(struct thread *t) {
+static socket_handle handshake(struct thread *t) {
 	unsigned char buf[1024];
 	ssize_t n;
 	int ret;
+	socket_handle connected;
 	enum authmethod am;
 	t->state = SS_1_CONNECTED;
-	while((n = recv(t->client.fd, buf, sizeof buf, 0)) > 0) {
+	while((n = recv(t->client.fd, (char*)buf, sizeof buf, 0)) > 0) {
 		switch(t->state) {
 			case SS_1_CONNECTED:
 				am = check_auth_method(buf, n, &t->client);
 				if(am == AM_NO_AUTH) t->state = SS_3_AUTHED;
 				else if (am == AM_USERNAME) t->state = SS_2_NEED_AUTH;
 				send_auth_response(t->client.fd, 5, am);
-				if(am == AM_INVALID) return -1;
+				if(am == AM_INVALID) return INVALID_SOCKET;
 				break;
 			case SS_2_NEED_AUTH:
 				ret = check_credentials(buf, n);
 				send_auth_response(t->client.fd, 1, ret);
 				if(ret != EC_SUCCESS)
-					return -1;
+					return INVALID_SOCKET;
 				t->state = SS_3_AUTHED;
-				if(auth_ips && !pthread_rwlock_wrlock(&auth_ips_lock)) {
+				if(auth_ips && !auth_write_lock()) {
 					if(!is_in_authed_list(&t->client.addr))
 						add_auth_ip(&t->client.addr);
-					pthread_rwlock_unlock(&auth_ips_lock);
+					auth_write_unlock();
 				}
 				break;
 			case SS_3_AUTHED:
-				ret = connect_socks_target(buf, n, &t->client);
+				ret = connect_socks_target(buf, n, &t->client, &connected);
 				if(ret < 0) {
 					send_error(t->client.fd, ret*-1);
-					return -1;
+					return INVALID_SOCKET;
 				}
 				send_error(t->client.fd, EC_SUCCESS);
-				return ret;
+				return connected;
 		}
 	}
-	return -1;
+	return INVALID_SOCKET;
 }
 
+#ifdef _WIN32
+static unsigned __stdcall clientthread(void *data) {
+#else
 static void* clientthread(void *data) {
+#endif
 	struct thread *t = data;
-	int remotefd = handshake(t);
-	if(remotefd != -1) {
+	socket_handle remotefd = handshake(t);
+	if(remotefd != INVALID_SOCKET) {
 		copyloop(t->client.fd, remotefd);
-		close(remotefd);
+		socket_close(remotefd);
 	}
-	close(t->client.fd);
-	t->done = 1;
+	socket_close(t->client.fd);
+	atomic_store(&t->done, 1);
 	return 0;
 }
 
@@ -370,8 +406,13 @@ static void collect(sblist *threads) {
 	size_t i;
 	for(i=0;i<sblist_getsize(threads);) {
 		struct thread* thread = *((struct thread**)sblist_get(threads, i));
-		if(thread->done) {
+		if(atomic_load(&thread->done)) {
+#ifdef _WIN32
+			WaitForSingleObject(thread->handle, INFINITE);
+			CloseHandle(thread->handle);
+#else
 			pthread_join(thread->pt, 0);
+#endif
 			sblist_delete(threads, i);
 			free(thread);
 		} else
@@ -410,11 +451,26 @@ static void zero_arg(char *s) {
 	for(i=0;i<l;i++) s[i] = 0;
 }
 
+#ifdef _WIN32
+static void winsock_cleanup(void) {
+	WSACleanup();
+}
+#endif
+
 int main(int argc, char** argv) {
 	int ch;
 	const char *listenip = "0.0.0.0";
 	char *p, *q;
 	unsigned port = 1080;
+#ifdef _WIN32
+	WSADATA wsa;
+	int wsa_error = WSAStartup(MAKEWORD(2, 2), &wsa);
+	if(wsa_error) {
+		fprintf(stderr, "WSAStartup failed (%d)\n", wsa_error);
+		return 1;
+	}
+	atexit(winsock_cleanup);
+#endif
 	while((ch = getopt(argc, argv, ":1qb:t:i:p:u:P:w:")) != -1) {
 		switch(ch) {
 			case 'w': /* fall-through */
@@ -473,48 +529,56 @@ int main(int argc, char** argv) {
 		dprintf(2, "error: -1/-w options must be used together with user/pass\n");
 		return 1;
 	}
+#ifndef _WIN32
 	signal(SIGPIPE, SIG_IGN);
+#endif
 	struct server s;
 	sblist *threads = sblist_new(sizeof (struct thread*), 8);
 	if(server_setup(&s, listenip, port)) {
-		perror("server_setup");
+		fprintf(stderr, "server_setup failed for %s:%u\n", listenip, port);
 		return 1;
 	}
-	server = &s;
 
 	while(1) {
 		collect(threads);
 		struct client c;
 		struct thread *curr = malloc(sizeof (struct thread));
 		if(!curr) goto oom;
-		curr->done = 0;
+		atomic_init(&curr->done, 0);
 		if(server_waitclient(&s, &c)) {
 			dolog("failed to accept connection\n");
 			free(curr);
-			usleep(FAILURE_TIMEOUT);
+			resource_pause();
 			continue;
 		}
 		curr->client = c;
 		if(!sblist_add(threads, &curr)) {
-			close(curr->client.fd);
+			socket_close(curr->client.fd);
 			free(curr);
 			oom:
 			dolog("rejecting connection due to OOM\n");
-			usleep(FAILURE_TIMEOUT); /* prevent 100% CPU usage in OOM situation */
+			resource_pause(); /* prevent 100% CPU usage in OOM situation */
 			continue;
 		}
+#ifdef _WIN32
+		curr->handle = (HANDLE)_beginthreadex(NULL, 0, clientthread, curr, 0, NULL);
+		if(!curr->handle) {
+#else
 		pthread_attr_t *a = 0, attr;
 		if(pthread_attr_init(&attr) == 0) {
 			a = &attr;
 			pthread_attr_setstacksize(a, THREAD_STACK_SIZE);
 		}
 		if(pthread_create(&curr->pt, a, clientthread, curr) != 0) {
+#endif
 			sblist_delete(threads, sblist_getsize(threads)-1);
-			close(curr->client.fd);
+			socket_close(curr->client.fd);
 			free(curr);
-			dolog("pthread_create failed. OOM?\n");
-			usleep(FAILURE_TIMEOUT);
+			dolog("failed to start client thread\n");
+			resource_pause();
 		}
+#ifndef _WIN32
 		if(a) pthread_attr_destroy(&attr);
+#endif
 	}
 }
