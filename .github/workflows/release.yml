@@ -113,8 +113,3 @@ jobs:
           fi
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "MicroSocks $TAG" --generate-notes
-      - name: Remove the superseded v1.0.1-rampage.2 release
-        if: needs.build.outputs.tag == 'v1.0.1-rampage.3'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release delete v1.0.1-rampage.2 --repo "$GITHUB_REPOSITORY" --yes
