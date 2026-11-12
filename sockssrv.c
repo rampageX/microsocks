@@ -423,8 +423,12 @@ static void collect(sblist *threads) {
 	}
 }
 
-static int usage(void) {
-	dprintf(2,
+#ifndef MICROSOCKS_VERSION
+#define MICROSOCKS_VERSION "development"
+#endif
+
+static int usage(int status) {
+	fprintf(status ? stderr : stdout,
 		"MicroSocks SOCKS5 Server\n"
 		"------------------------\n"
 		"usage: microsocks -1 -q -t timeout -i listenip -p port -u user -P pass -b bindaddr -w ips\n"
@@ -444,8 +448,9 @@ static int usage(void) {
 		"   this is handy for programs like firefox that don't support\n"
 		"   user/pass auth. for it to work you'd basically make one connection\n"
 		"   with another program that supports it, and then you can use firefox too.\n"
+		"\nVersion: " MICROSOCKS_VERSION "\n"
 	);
-	return 1;
+	return status;
 }
 
 /* prevent username and password from showing up in top. */
@@ -474,8 +479,10 @@ int main(int argc, char** argv) {
 	}
 	atexit(winsock_cleanup);
 #endif
-	while((ch = getopt(argc, argv, ":1qb:t:i:p:u:P:w:")) != -1) {
+	while((ch = getopt(argc, argv, ":h1qb:t:i:p:u:P:w:")) != -1) {
 		switch(ch) {
+			case 'h':
+				return usage(0);
 			case 'w': /* fall-through */
 			case '1':
 				if(!auth_ips)
@@ -521,7 +528,7 @@ int main(int argc, char** argv) {
 				dprintf(2, "error: option -%c requires an operand\n", optopt);
 				/* fall through */
 			case '?':
-				return usage();
+				return usage(1);
 		}
 	}
 	if((auth_user && !auth_pass) || (!auth_user && auth_pass)) {

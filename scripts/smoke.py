@@ -1,5 +1,6 @@
 """Run local SOCKS5 CONNECT and authentication smoke tests."""
 
+import os
 import socket
 import subprocess
 import sys
@@ -71,6 +72,10 @@ def run_proxy_test(command, auth_once):
 
 
 def main(command):
+    version = os.environ.get("MICROSOCKS_EXPECT_VERSION")
+    if version:
+        help_text = subprocess.check_output([*command, "-h"], text=True, timeout=10)
+        assert help_text.splitlines()[-1] == f"Version: {version}", help_text
     run_proxy_test(command, auth_once=False)
     run_proxy_test(command, auth_once=True)
     print("SOCKS5 no-auth, auth-once, hostname lookup and TCP relay passed")

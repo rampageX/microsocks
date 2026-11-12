@@ -66,8 +66,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/armv5te" "$RUNNER_TEMP/aarch64"
           tar -xf "dist/microsocks-$TAG-linux-armv5te-sf.tar.gz" -C "$RUNNER_TEMP/armv5te"
           tar -xf "dist/microsocks-$TAG-linux-aarch64.tar.gz" -C "$RUNNER_TEMP/aarch64"
-          python3 scripts/smoke.py qemu-arm -cpu arm926 "$RUNNER_TEMP/armv5te/microsocks"
-          python3 scripts/smoke.py qemu-aarch64 "$RUNNER_TEMP/aarch64/microsocks"
+          MICROSOCKS_EXPECT_VERSION="$TAG" python3 scripts/smoke.py qemu-arm -cpu arm926 "$RUNNER_TEMP/armv5te/microsocks"
+          MICROSOCKS_EXPECT_VERSION="$TAG" python3 scripts/smoke.py qemu-aarch64 "$RUNNER_TEMP/aarch64/microsocks"
       - uses: actions/upload-artifact@v4
         with:
           name: static-release
@@ -88,6 +88,7 @@ jobs:
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           Expand-Archive "dist/microsocks-${env:TAG}-windows-x64.zip" "$env:RUNNER_TEMP/microsocks"
+          $env:MICROSOCKS_EXPECT_VERSION = $env:TAG
           python scripts/smoke.py "$env:RUNNER_TEMP/microsocks/microsocks.exe"
 
   publish:
@@ -112,3 +113,8 @@ jobs:
           fi
           gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "MicroSocks $TAG" --generate-notes
+      - name: Remove the superseded v1.0.1-rampage.2 release
+        if: needs.build.outputs.tag == 'v1.0.1-rampage.3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete v1.0.1-rampage.2 --repo "$GITHUB_REPOSITORY" --yes

@@ -25,6 +25,9 @@ clean:
 	rm -f $(PROG)
 	rm -f $(OBJS)
 
+sockssrv.o: release-version
+sockssrv.o: CPPFLAGS += -DMICROSOCKS_VERSION='"$(shell cat release-version)"'
+
 %.o: %.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(INC) $(PIC) -c -o $@ $<
 

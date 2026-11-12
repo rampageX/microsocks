@@ -56,7 +56,7 @@ work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 mkdir -p "$work"/{stage,assets} dist
 sources=(sockssrv.c server.c sblist.c sblist_delete.c)
-common=(-std=c11 -Os -s -static)
+common=(-std=c11 -Os -s -static "-DMICROSOCKS_VERSION=\"$tag\"")
 cp COPYING "$work/stage/"
 
 build_linux() {
@@ -74,7 +74,7 @@ build_linux() {
         LC_ALL=C readelf -A "$output" | grep -E 'Tag_CPU_arch: v5TEJ?$'
     fi
     if [[ $arch == x86_64 && $(uname -m) == x86_64 && $(uname -s) == Linux ]]; then
-        python3 scripts/smoke.py "$output"
+        MICROSOCKS_EXPECT_VERSION="$tag" python3 scripts/smoke.py "$output"
     fi
     tar -C "$work/stage" -czf "$work/assets/microsocks-$tag-linux-$arch.tar.gz" microsocks COPYING
 }
