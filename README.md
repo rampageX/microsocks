@@ -99,19 +99,23 @@ usage.
 Static release builds
 ---------------------
 
-Each release contains Linux ARMv7-A soft-float, AArch64 and x86-64
+Each release contains Linux ARMv5TE soft-float, AArch64 and x86-64
 musl builds, plus a Windows x64 executable. The Windows executable
 imports Windows system DLLs, including Winsock and the inbox Universal
 CRT on Windows 10 and later. No extra runtime DLLs are bundled.
 
-On an x86-64 Linux build host with Zig 0.15.2, Python 3, GNU binutils,
-tar and zip installed:
+On an x86-64 Linux build host, install Zig 0.15.2, Python 3, GNU
+binutils, tar and zip. The ARM builds use Bootlin's 2024.05-1 musl GCC
+toolchains for [ARMv5 EABI](https://toolchains.bootlin.com/downloads/releases/toolchains/armv5-eabi/tarballs/armv5-eabi--musl--stable-2024.05-1.tar.xz)
+and [AArch64](https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--musl--stable-2024.05-1.tar.xz).
 
-    ./release.sh v1.0.1-rampage.1
+    ./release.sh v1.0.1-rampage.2
 
 The script builds and inspects all four archives and runs a loopback
-SOCKS5 smoke test for Linux x86-64. Output goes to `dist/`. Set `ZIG` to
-the compiler executable path if it is outside `PATH`.
+SOCKS5 smoke test for Linux x86-64. Output goes to `dist/`. Set `ZIG`,
+`ARM_CC` and `AARCH64_CC` to the compiler paths if `zig`,
+`arm-buildroot-linux-musleabi-gcc` or `aarch64-buildroot-linux-musl-gcc`
+are outside `PATH`.
 
 Push a new version tag to run the GitHub Actions release workflow.
 It runs the ARM tests under QEMU and the Windows test on a Windows
@@ -121,4 +125,4 @@ runner before publishing. Pushing a change to `release-version` on
 To publish manually from a clean checkout of a commit already pushed
 to GitHub, authenticate `gh` with repository write access and run:
 
-    ./release.sh v1.0.1-rampage.1 --publish
+    ./release.sh v1.0.1-rampage.2 --publish

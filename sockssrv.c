@@ -54,7 +54,10 @@
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #endif
 
-#ifdef PTHREAD_STACK_MIN
+/* Leave room for the resolver and libc thread startup on musl targets. */
+#if defined(__linux__) && !defined(__GLIBC__)
+#define THREAD_STACK_SIZE (128 * 1024)
+#elif defined(PTHREAD_STACK_MIN)
 #define THREAD_STACK_SIZE MAX(16*1024, PTHREAD_STACK_MIN)
 #else
 #define THREAD_STACK_SIZE 64*1024

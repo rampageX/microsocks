@@ -34,6 +34,22 @@ jobs:
           fi
           [[ $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9]+)*$ ]]
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Install the ARM musl cross-compilers
+        run: |
+          cd "$RUNNER_TEMP"
+          install_toolchain() {
+            local target=$1 digest=$2 compiler=$3 variable=$4
+            local toolchain="$target--musl--stable-2024.05-1"
+            local archive="$toolchain.tar.xz"
+            curl --fail --silent --show-error --location --retry 3 \
+              "https://toolchains.bootlin.com/downloads/releases/toolchains/$target/tarballs/$archive" \
+              --output "$archive"
+            echo "$digest  $archive" | sha256sum -c -
+            tar -xf "$archive"
+            echo "$variable=$RUNNER_TEMP/$toolchain/bin/$compiler" >> "$GITHUB_ENV"
+          }
+          install_toolchain armv5-eabi 9825d9a4515a92d2251aab3228ddbb6258440b0f952b95fcaa94653a4b29c71a arm-buildroot-linux-musleabi-gcc ARM_CC
+          install_toolchain aarch64 f847da1195325525f3f07eef045ef40c6b48464a37e0f7fea77360dfe0bc1aa1 aarch64-buildroot-linux-musl-gcc AARCH64_CC
       - name: Build and verify static binaries
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -47,10 +63,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user
-          mkdir -p "$RUNNER_TEMP/armv7" "$RUNNER_TEMP/aarch64"
-          tar -xf "dist/microsocks-$TAG-linux-armv7-sf.tar.gz" -C "$RUNNER_TEMP/armv7"
+          mkdir -p "$RUNNER_TEMP/armv5te" "$RUNNER_TEMP/aarch64"
+          tar -xf "dist/microsocks-$TAG-linux-armv5te-sf.tar.gz" -C "$RUNNER_TEMP/armv5te"
           tar -xf "dist/microsocks-$TAG-linux-aarch64.tar.gz" -C "$RUNNER_TEMP/aarch64"
-          python3 scripts/smoke.py qemu-arm -cpu cortex-a9,vfp=off,neon=off,vfp-d32=off "$RUNNER_TEMP/armv7/microsocks"
+          python3 scripts/smoke.py qemu-arm -cpu arm926 "$RUNNER_TEMP/armv5te/microsocks"
           python3 scripts/smoke.py qemu-aarch64 "$RUNNER_TEMP/aarch64/microsocks"
       - uses: actions/upload-artifact@v4
         with:

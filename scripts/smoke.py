@@ -26,7 +26,7 @@ def open_proxy(process, port):
     raise RuntimeError("Proxy did not start")
 
 
-def check_relay(client, target, *, auth):
+def check_relay(client, target, *, auth, address):
     client.sendall(b"\x05\x01" + (b"\x02" if auth else b"\x00"))
     expected = b"\x05\x02" if auth else b"\x05\x00"
     assert read_exact(client, 2) == expected
@@ -34,7 +34,6 @@ def check_relay(client, target, *, auth):
         client.sendall(b"\x01\x04test\x06secret")
         assert read_exact(client, 2) == b"\x01\x00"
 
-    address = b"127.0.0.1"
     target_port = target.getsockname()[1]
     client.sendall(b"\x05\x01\x00\x03" + bytes([len(address)]) + address + target_port.to_bytes(2, "big"))
     assert read_exact(client, 10)[:4] == b"\x05\x00\x00\x01"
@@ -47,7 +46,7 @@ def check_relay(client, target, *, auth):
         assert read_exact(client, 4) == b"pong"
 
 
-def main(command):
+def run_proxy_test(command, auth_once):
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
@@ -56,18 +55,25 @@ def main(command):
         target.bind(("127.0.0.1", 0))
         target.listen()
         target.settimeout(2)
-        process = subprocess.Popen(
-            [*command, "-i", "127.0.0.1", "-p", str(port), "-1", "-u", "test", "-P", "secret"]
-        )
+        args = [*command, "-i", "127.0.0.1", "-p", str(port), "-b", "127.0.0.1"]
+        if auth_once:
+            args += ["-1", "-u", "test", "-P", "secret"]
+        process = subprocess.Popen(args)
         try:
+            if auth_once:
+                with open_proxy(process, port) as client:
+                    check_relay(client, target, auth=True, address=b"127.0.0.1")
             with open_proxy(process, port) as client:
-                check_relay(client, target, auth=True)
-            with open_proxy(process, port) as client:
-                check_relay(client, target, auth=False)
+                check_relay(client, target, auth=False, address=b"localhost")
         finally:
             process.terminate()
             process.wait(timeout=5)
-    print("SOCKS5 authentication, auth-once and TCP relay passed")
+
+
+def main(command):
+    run_proxy_test(command, auth_once=False)
+    run_proxy_test(command, auth_once=True)
+    print("SOCKS5 no-auth, auth-once, hostname lookup and TCP relay passed")
 
 
 if __name__ == "__main__":

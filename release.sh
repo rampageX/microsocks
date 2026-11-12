@@ -15,10 +15,23 @@ mode=${2:-}
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 repo=${RELEASE_REPO:-rampageX/microsocks}
 zig=${ZIG:-zig}
+arm_cc=${ARM_CC:-arm-buildroot-linux-musleabi-gcc}
+aarch64_cc=${AARCH64_CC:-aarch64-buildroot-linux-musl-gcc}
 [[ $("$zig" version) == 0.15.2 ]] || {
     echo "Zig 0.15.2 is required." >&2
     exit 1
 }
+
+check_compiler() {
+    local compiler=$1 target=$2 variable=$3
+    if ! command -v "$compiler" >/dev/null || [[ $("$compiler" -dumpmachine) != $target ]]; then
+        echo "Set $variable to the musl GCC cross-compiler for $target (see README.md)." >&2
+        exit 1
+    fi
+}
+
+check_compiler "$arm_cc" 'arm*-linux-musleabi' ARM_CC
+check_compiler "$aarch64_cc" 'aarch64*-linux-musl' AARCH64_CC
 
 if [[ $mode == --publish ]]; then
     git diff --quiet HEAD
@@ -47,18 +60,18 @@ common=(-std=c11 -Os -s -static)
 cp COPYING "$work/stage/"
 
 build_linux() {
-    local arch=$1 target=$2 machine=$3
-    shift 3
+    local arch=$1 machine=$2
+    shift 2
     local output="$work/stage/microsocks"
-    "$zig" cc -target "$target" "${common[@]}" "$@" -o "$output" "${sources[@]}" -pthread
+    "$@" "${common[@]}" -o "$output" "${sources[@]}" -pthread
     local header program_headers dynamic
     header=$(LC_ALL=C readelf -h "$output")
     program_headers=$(LC_ALL=C readelf -l "$output")
     dynamic=$(LC_ALL=C readelf -d "$output")
     [[ $header == *"Machine:"*"$machine"* && $program_headers != *INTERP* && $dynamic != *NEEDED* ]]
-    if [[ $arch == armv7-sf ]]; then
+    if [[ $arch == armv5te-sf ]]; then
         [[ $header == *"soft-float ABI"* ]]
-        LC_ALL=C readelf -A "$output" | grep -E 'Tag_CPU_arch: v7$'
+        LC_ALL=C readelf -A "$output" | grep -E 'Tag_CPU_arch: v5TEJ?$'
     fi
     if [[ $arch == x86_64 && $(uname -m) == x86_64 && $(uname -s) == Linux ]]; then
         python3 scripts/smoke.py "$output"
@@ -66,9 +79,9 @@ build_linux() {
     tar -C "$work/stage" -czf "$work/assets/microsocks-$tag-linux-$arch.tar.gz" microsocks COPYING
 }
 
-build_linux armv7-sf arm-linux.2.6.36-musleabi ARM -mcpu=generic+v7a+soft_float
-build_linux aarch64 aarch64-linux-musl AArch64
-build_linux x86_64 x86_64-linux-musl 'Advanced Micro Devices X86-64'
+build_linux armv5te-sf ARM "$arm_cc" -march=armv5te -marm -mfloat-abi=soft
+build_linux aarch64 AArch64 "$aarch64_cc"
+build_linux x86_64 'Advanced Micro Devices X86-64' "$zig" cc -target x86_64-linux-musl
 
 windows="$work/stage/microsocks.exe"
 "$zig" cc -target x86_64-windows-gnu "${common[@]}" -o "$windows" "${sources[@]}" -lws2_32
